@@ -19,6 +19,8 @@ import useBLE from "./useBLE";
 import RNFS from 'react-native-fs';
 import { MaterialIcons } from '@expo/vector-icons';  // Import MaterialIcons from expo
 import SplashScreen from './SplashScreen'; // Add this import
+import { Device } from 'react-native-ble-plx';
+import Toast from 'react-native-toast-message'; // Import the Toast library
 
 
 interface MeasuredValue {
@@ -27,6 +29,35 @@ interface MeasuredValue {
   value: string;
 }
 
+interface ToastConfig {
+  type: 'success' | 'error' | 'info';
+  text1: string;
+  text2: string;
+  position?: 'top' | 'bottom';
+  visibilityTime?: number;
+  topOffset?: number;
+}
+
+const toastConfig = {
+  success: ({ text1, text2 }: { text1: string; text2: string }) => (
+    <View style={[styles.toastContainer, styles.successToast]}>
+      <Text style={styles.toastTitle}>{text1}</Text>
+      <Text style={styles.toastMessage}>{text2}</Text>
+    </View>
+  ),
+  error: ({ text1, text2 }: { text1: string; text2: string }) => (
+    <View style={[styles.toastContainer, styles.errorToast]}>
+      <Text style={styles.toastTitle}>{text1}</Text>
+      <Text style={styles.toastMessage}>{text2}</Text>
+    </View>
+  ),
+  info: ({ text1, text2 }: { text1: string; text2: string }) => (
+    <View style={[styles.toastContainer, styles.infoToast]}>
+      <Text style={styles.toastTitle}>{text1}</Text>
+      <Text style={styles.toastMessage}>{text2}</Text>
+    </View>
+  ),
+};
 
 const PAGE_SIZE = 12; // Number of items per page
 
@@ -36,27 +67,38 @@ export default function App() {
     scanForPeripherals,
     allDevices,
     connectToDevice,
-    connectedDevice,
-    caliperValue,
+    connectedDevices,
     disconnectFromDevice,
+    caliperValue,
   } = useBLE();
 
   const [isModalVisible, setIsModalVisible] = useState<boolean>(false);
   const [caliperValueInput, setcaliperValueInput] = useState("");
-  const [bleValue, setBleValue] = useState("");
+  const [blevalue, setBleValue] = useState<string>(""); // Explicitly set bleValue type as string[]
   const [measuredValues, setMeasuredValues] = useState<MeasuredValue[]>([]);
   const [partNumberInput, setPartNumberInput] = useState<string>(''); // Add state for Part Number
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [isStarted, setIsStarted] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [individualValues, setIndividualValues] = useState<string[]>([]); // Array to hold individual values
 
-  console.log("caliperValue :", caliperValue);
-  console.log("bleValue :" , bleValue);
+
+  const showToast = (config: ToastConfig): void => {
+    Toast.show({
+      ...config,
+      position: 'top',
+      visibilityTime: config.visibilityTime || 2000,
+      topOffset: 50, // Distance from top of screen
+    });
+  };
 
   useEffect(()=>{
     setBleValue(String(caliperValue.value));
-    setcaliperValueInput(bleValue);
-  },[caliperValue , bleValue]);
+    setcaliperValueInput(blevalue);
+  },[caliperValue , blevalue]);
+
+
+  console.log("ble value:", blevalue);
 
   useEffect(() => {
     if (isStarted && caliperValueInput) {
@@ -71,7 +113,8 @@ export default function App() {
         clearInterval(intervalRef.current);
       }
     };
-  }, [isStarted, caliperValueInput , bleValue]);
+  }, [isStarted, caliperValueInput , blevalue]);
+
 
   const scanForDevices = async () => {
     const isPermissionsEnabled = await requestPermissions();
@@ -90,24 +133,25 @@ export default function App() {
   };
 
   const addMeasuredValue = (value: string) => {
-    if (value && partNumberInput) {
+    if (value && partNumberInput){
+     
+      const timestamp = Date.now();
       const newValue: MeasuredValue = {
-        id: measuredValues.length + 1, // Use timestamp as a unique identifier
-        partNumber: partNumberInput, 
+        id: measuredValues.length + 1,
+        partNumber: partNumberInput,
         value: value,
       };
-      setMeasuredValues((prevValues) => [...prevValues, newValue]);
-      setBleValue("");
-      setcaliperValueInput("");
+
+      setMeasuredValues(prevValues => [...prevValues, newValue]);
+      console.log("value:",value);
     }
-   
   };
 
-  const handleStart = () => {
+
+   const handleStart = () => {
     if (caliperValueInput && partNumberInput && !isStarted) {
       addMeasuredValue(caliperValueInput);
       setIsStarted(true);
-      setBleValue("");
       setcaliperValueInput("");
     }
     else{
@@ -117,6 +161,7 @@ export default function App() {
       );
     }
   };
+
 
   const getNextAvailableFilename = async (baseFilename: string, extension: string): Promise<string> => {
     let counter = 1;
@@ -195,6 +240,40 @@ export default function App() {
   const startIndex = (currentPage - 1) * PAGE_SIZE;
   const currentData = measuredValues.slice(startIndex, startIndex + PAGE_SIZE);
 
+  const handleDeviceConnection = async (device: Device): Promise<void> => {
+    try {
+      await connectToDevice(device);
+      showToast({
+        type: 'success',
+        text1: 'Connected',
+        text2: `Successfully connected to device ${device.name || device.id}`,
+      });
+    } catch (error) {
+      showToast({
+        type: 'error',
+        text1: 'Connection Failed',
+        text2: `Unable to connect to device: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
+    }
+  };
+
+  const handleDeviceDisconnection = async (deviceId: string): Promise<void> => {
+    try {
+      await disconnectFromDevice(deviceId);
+      showToast({
+        type: 'info',
+        text1: 'Disconnected',
+        text2: 'Device has been disconnected successfully',
+      });
+    } catch (error) {
+      showToast({
+        type: 'error',
+        text1: 'Disconnection Failed',
+        text2: `Error disconnecting device: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
+    }
+  };
+
   return  (
     <SafeAreaView style={styles.container}>
       {/* Top section with logo */}
@@ -204,6 +283,7 @@ export default function App() {
       </View>
 
        {/* Part Number Input */}
+       
        <View style={styles.partNumberInputRow}>
         <Text style={{ fontSize: 18 }}>Enter PartNumber : </Text>
         <TextInput
@@ -217,11 +297,11 @@ export default function App() {
       {/* Main UI for connecting, input, and adding measured values */}
       <View style={styles.inputRow}>
       <TouchableOpacity
-        onPress={connectedDevice ? disconnectFromDevice : openModal}
+        onPress={openModal}
         style={styles.connectButton}
       >
         <Text style={styles.connectButtonText}>
-          {connectedDevice ? "Disconnect" : "Connect"}
+          {"Connectivity"}
         </Text>
       </TouchableOpacity>
 
@@ -232,11 +312,11 @@ export default function App() {
         value={caliperValueInput}
         onChangeText={(text) => setcaliperValueInput(text)}
       />
-
+      
         <TouchableOpacity
-          onPress={handleStart}
-          style={[styles.addButton, isStarted && styles.disabledButton2]}
-          disabled={isStarted}
+        onPress={() => handleStart()}
+        style={[styles.addButton, isStarted && styles.disabledButton2]}
+        disabled={isStarted}
         >
         <Text style={styles.addButtonText}>Start</Text>
       </TouchableOpacity>
@@ -261,13 +341,13 @@ export default function App() {
         <FlatList
           data={currentData}
           keyExtractor={(item) => item.id.toString()}
-          renderItem={({ item , index }) => (
+          renderItem={({ item, index }) => (
             <View style={styles.tableRow}>
-              <Text style={styles.tableCell}>{item.id}</Text>
+              <Text style={styles.tableCell}>{index + 1 + (currentPage - 1) * PAGE_SIZE}</Text>
               <Text style={styles.tableCell}>{item.partNumber}</Text>
               <Text style={styles.tableCell}>{item.value}</Text>
               <View style={styles.tableCell}>
-                {item.id === measuredValues[measuredValues.length - 1].id && (
+                {index === currentData.length - 1 && (
                   <TouchableOpacity 
                     onPress={() => handleDelete(item.id)}
                     style={styles.deleteButton}
@@ -295,10 +375,13 @@ export default function App() {
       <DeviceModal
         closeModal={hideModal}
         visible={isModalVisible}
-        connectToPeripheral={connectToDevice}
+        connectToPeripheral={handleDeviceConnection}
+        connectedDevices={connectedDevices}  // Pass the first connected device
         devices={allDevices}
+        disconnectFromDevice={handleDeviceDisconnection}
       />
-    </SafeAreaView>
+      <Toast/>  
+        </SafeAreaView>
   );
 }
 
@@ -444,5 +527,42 @@ const styles = StyleSheet.create({
     padding: 5,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  toastContainer: {
+    width: '90%',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginHorizontal: 20,
+    marginTop: 20,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+  successToast: {
+    backgroundColor: '#4CAF50',
+  },
+  errorToast: {
+    backgroundColor: '#FF5252',
+  },
+  infoToast: {
+    backgroundColor: '#2196F3',
+  },
+  toastTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  toastMessage: {
+    color: '#FFFFFF',
+    fontSize: 14,
   },
 });

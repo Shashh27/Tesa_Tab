@@ -14,20 +14,22 @@ import base64 from "react-native-base64";
 const HEART_RATE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const HEART_RATE_CHARACTERISTIC = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
+
+
 interface BluetoothLowEnergyApi {
-    requestPermissions(): Promise<boolean>;
-    scanForPeripherals(): void;
-    connectToDevice: (deviceId: Device) => Promise<void>;
-    disconnectFromDevice: () => void;
-    connectedDevice: Device | null;
-    allDevices: Device[];
-    caliperValue: { value: string; timestamp: number };
+  requestPermissions(): Promise<boolean>;
+  scanForPeripherals(): void;
+  connectToDevice: (device: Device) => Promise<void>;
+  disconnectFromDevice: (deviceId: string) => void;
+  connectedDevices:  Device[];
+  allDevices: Device[];
+  caliperValue: { value: string; timestamp: number };
   }
   
 function useBLE(): BluetoothLowEnergyApi {
   const bleManager = useMemo(() => new BleManager(), []);
   const [allDevices, setAllDevices] = useState<Device[]>([]);
-  const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
+  const [connectedDevices, setConnectedDevices] = useState<Device[]>([]);
   const [caliperValue, setCaliperValue] = useState<{ value: string; timestamp: number }>({ value: "", timestamp: Date.now() });
 
 
@@ -96,7 +98,7 @@ function useBLE(): BluetoothLowEnergyApi {
             console.log(error);
           }
     
-          if (device && device.name?.includes("TLC-BLE")) {
+          if (device) {
             setAllDevices((prevState: Device[]) => {
               if (!isDuplicteDevice(prevState, device)) {
                 return [...prevState, device];
@@ -107,58 +109,62 @@ function useBLE(): BluetoothLowEnergyApi {
         });
 
 
-  const connectToDevice = async (device: Device) => {
-    try {
-      const deviceConnection = await bleManager.connectToDevice(device.id);
-      setConnectedDevice(deviceConnection);
-      await deviceConnection.discoverAllServicesAndCharacteristics();
-      bleManager.stopDeviceScan();
-      startStreamingData(deviceConnection);
-    } catch (e) {
-      console.log("FAILED TO CONNECT", e);
-    }
-  };
+        const connectToDevice = async (device: Device) => {
+          try {
+            const deviceConnection = await bleManager.connectToDevice(device.id);
+            await deviceConnection.discoverAllServicesAndCharacteristics();
+            
+            setConnectedDevices((prevDevices) => [
+              ...prevDevices,
+              device, // Here, we are adding the full device object
+            ]);
+            startStreamingData(deviceConnection);
+          } catch (e) {
+            console.log("FAILED TO CONNECT", e);
+          }
+        };
 
-  const disconnectFromDevice = () => {
-    if (connectedDevice) {
-      bleManager.cancelDeviceConnection(connectedDevice.id);
-      setConnectedDevice(null);
-      setCaliperValue({ value: "", timestamp: Date.now() });
-    }
-  };
+        const disconnectFromDevice = (deviceId: string) => {
+          bleManager.cancelDeviceConnection(deviceId);
+          setConnectedDevices((prevDevices) =>
+            prevDevices.filter((d) => d.id !== deviceId) // Use d.id to match the deviceId
+          );
+        };
 
- const onHeartRateUpdate = (
-     error: BleError | null,
-    characteristic: Characteristic | null
-  ) => {
-    if (error) {
-      console.log("Error reading caliper value:", error);
-      return;
-    } else if (!characteristic?.value) {
-      console.log("No data was received");
-      return;
-    }
+        const onValueUpdate = (
+          deviceId: string,
+          error: BleError | null,
+          characteristic: Characteristic | null
+        ): void => {
+          if (error) {
+            console.log("Error reading value:", error);
+            return;
+          } else if (!characteristic?.value) {
+            console.log("No data was received");
+            return;
+          }
+      
+          const rawData: string = base64.decode(characteristic.value);
+          console.log("Raw data from device", deviceId, ":", rawData);
+      
+          const value = parseFloat(rawData);
+          if (!isNaN(value)) {
+            setCaliperValue({ value: String(value), timestamp: Date.now() });
+          } else {
+            console.log("Invalid data received:", rawData);
+          }
+        };
 
-    const rawData = base64.decode(characteristic.value);
-    console.log("Raw data:", rawData);
+        console.log("caliperValue:", caliperValue.value);
 
-    // Parse the data according to your TLC-BLE protocol
-    // This is an example parsing method, adjust according to your device's data format
-    const value = parseFloat(rawData);
-    if (!isNaN(value)) {
-      setCaliperValue({ value: String(value), timestamp: Date.now() });
-    } else {
-      console.log("Invalid data received:", rawData);
-    }
-  };
-
+        
 
         const startStreamingData = async (device: Device) => {
           if (device) {
             device.monitorCharacteristicForService(
               HEART_RATE_UUID,
               HEART_RATE_CHARACTERISTIC,
-              onHeartRateUpdate
+              (error, characteristic) => onValueUpdate(device.id, error, characteristic)
             );
           } else {
             console.log("No Device Connected");
@@ -170,7 +176,7 @@ function useBLE(): BluetoothLowEnergyApi {
         requestPermissions,
         connectToDevice,
         allDevices,
-        connectedDevice,
+        connectedDevices,
         disconnectFromDevice,
         caliperValue,
       }
